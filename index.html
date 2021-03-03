@@ -72,9 +72,7 @@
         <script src="https://cdn.jsdelivr.net/npm/three@0.126/examples/js/loaders/GLTFLoader.js"></script>
         <script>
         
-            // const scene = new THREE.Scene();
-            // scene.background = new THREE.Color(0xa0a0a0);
-            // scene.userData.element = document.getElementById(asdf);
+            // CCD methods from http://www.virtualpuppetry.com/inverse_kinematics_ccd/paper.pdf 
 
             const scene_forward = new THREE.Scene();
             scene_forward.background = new THREE.Color(0xacddde);
@@ -121,7 +119,7 @@
             scene_forward.add(targetMesh); 
 
             const poleMesh = new THREE.Mesh( new THREE.BoxGeometry(.4, .4, .4), whiteMaterial);
-            poleMesh.position.set(2, -.3, -.5); 
+            poleMesh.position.set(2, -.3, 0); 
             scene_pole.add(poleMesh); 
 
             const meshMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff, skinning:true });
@@ -130,7 +128,6 @@
 
             scenes.forEach( function ( scene ) {
                 scene.userData.targetMesh = targetMesh.clone();
-                console.log(scene.userData.targetMesh);
                 scene.add(scene.userData.targetMesh);
 
                 const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
@@ -202,6 +199,8 @@
             });
 
             var angle_limit = .8; 
+            const up = new THREE.Quaternion(0,0,0,1);
+
             loader.load('mesh2.gltf', function (gltf) {
                 const model = gltf.scene;
                 model.position.y -= 3; 
@@ -215,24 +214,23 @@
                 scene_angle.userData.elbowBone = model.getObjectByName("ElbowBone");
                                 
                 scene_angle.userData.effector = model.getObjectByName("EndBone"); 
-                console.log(scene_angle.userData.effector); 
                 scene_angle.userData.currentBone = scene_angle.userData.effector; 
-
 
                 //add cones to visualize angle limits 
                 var coneGeometry = new THREE.ConeGeometry( Math.tan(angle_limit) * 1, 1, 32 );
 
-                var currentBone = scene_angle.userData.effector;
+                var currentBone = scene_angle.userData.effector.parent;
 
-                while(currentBone != scene_angle.userData.rootBone)
+                do
                 {
+                    var length = currentBone.position.y; 
                     currentBone = currentBone.parent; 
 
                     var mesh = new THREE.Mesh(coneGeometry, whiteMaterial); 
-                    mesh.position.y += 0.5; 
+                    mesh.position.y += 0.5 + length; 
                     mesh.scale.y *= -1; 
                     currentBone.add(mesh); 
-                }
+                }while(currentBone != scene_angle.userData.rootBone.parent);
 
 
                 scene_angle.add(model);
@@ -251,7 +249,6 @@
                 scene_stretchy.userData.elbowBone = model.getObjectByName("ElbowBone"); 
                 
                 scene_stretchy.userData.effector = model.getObjectByName("EndBone"); 
-                console.log(scene_stretchy.userData.effector); 
                 scene_stretchy.userData.currentBone = scene_stretchy.userData.effector; 
                 scene_stretchy.add(model);
 
@@ -266,7 +263,6 @@
                 }
                 limit += currentBone.position.y; 
                 limit += .5; 
-                console.log(limit); 
                 scene_stretchy.userData.limit = limit;
             });
 
@@ -274,18 +270,17 @@
             loader.load('mesh2.gltf', function (gltf) {
                 const model = gltf.scene;
                 model.position.y -= 3; 
+                console.log(model);
                 
                 model.getObjectByName("Cube").material = new THREE.MeshLambertMaterial({ color: 0xffffff, skinning:true });
 
                 scene_pole.userData.rootBone = model.getObjectByName("RootBone"); 
                 const helper = new THREE.SkeletonHelper(scene_pole.userData.rootBone);
                 scene_pole.add(helper);
-                //scene_pole.userData.rootBone.up = new THREE.Vector3(0,-1, 0); 
 
                 scene_pole.userData.elbowBone = model.getObjectByName("ElbowBone"); 
                 
                 scene_pole.userData.effector = model.getObjectByName("EndBone"); 
-                console.log(scene_pole.userData.effector); 
                 scene_pole.userData.currentBone = scene_pole.userData.effector; 
                 scene_pole.add(model);
             });
@@ -295,10 +290,10 @@
 
                 backwardCCD(scene_backward, 10); 
                 bouncingCCD(scene_bouncing, 10); 
-                moveToPole(scene_pole);
-               // forwardCCD(scene_pole, 10); 
+                poleCCD(scene_pole, 10); 
                 stretchCCD(scene_stretchy); 
                 backwardCCD(scene_stretchy, 10); 
+                clampedCCD(scene_angle, 2); 
 
                 scenes.forEach( function ( scene ) {
                     scene.userData.targetMesh.position.set(targetMesh.position.x, targetMesh.position.y, targetMesh.position.z); 
@@ -343,6 +338,27 @@
                 }
             }
 
+            function clampedCCD(scene, iterations) {
+                if(!scene.userData.currentBone) return false; 
+                for(var i = 0; i < iterations; i++){
+                    CCDStep(scene)
+                    
+                    var angle = 2 * Math.acos(scene.userData.currentBone.quaternion.w); 
+
+                    if(angle > angle_limit) {
+                        var amt = angle / (angle + angle_limit); 
+                        scene.userData.currentBone.quaternion.slerp(up, amt); 
+                    }
+
+                    if(scene.userData.currentBone != scene.userData.rootBone) scene.userData.currentBone = scene.userData.currentBone.parent; 
+                    else scene.userData.currentBone = scene.userData.effector.parent; 
+                }
+
+
+
+            }
+
+            //inspired by explanation in http://tinyphoenixgames.com/blog/building-stretchy-ik-chain-maya
             function stretchCCD(scene) {
 
                 if(!scene.userData.currentBone) return false; 
@@ -360,10 +376,15 @@
                 scene.userData.rootBone.scale.y = yscale; 
             }
 
-            function moveToPole(scene) {
+            //https://forum.unity.com/threads/ik-chain.40431/
+            function poleCCD(scene, iterations) {
                 if(!scene.userData.currentBone) return false; 
-                scene.userData.rootBone.lookAt(poleMesh.position);
-
+                moveToPole(scene);
+                for(var i = 0; i < iterations; i++){
+                    if(CCDStep(scene)) return; 
+                    if(scene.userData.currentBone != scene.userData.effector) scene.userData.currentBone = scene.userData.currentBone.children[0]; 
+                    else scene.userData.currentBone = scene.userData.rootBone.children[0]; 
+                }
             }
 
 
@@ -406,7 +427,7 @@
                 angle = THREE.MathUtils.clamp(angle, -1., 1.);
 
                 //do not bother if the angle is too small, causes jittering
-              //  if(Math.abs(angle) < .001) return false; 
+                if(Math.abs(angle) < .001) return false; 
 
                 //skip if the vectors are perpendicular or parallel
                 if(Math.abs(dot) < .00005) return false; 
@@ -419,9 +440,52 @@
                 cross.normalize(); 
                 scene.userData.currentBone.rotateOnAxis(cross, angle);
                 //scene.userData.currentBone.rotation.x= 0; 
+
+
                 return false;
             }
 
+            //points elbow towards pole mesh
+            function moveToPole(scene) {
+                if(!scene.userData.currentBone) return false; 
+
+                var elbowWorldPos = new THREE.Vector3(); 
+                scene.userData.elbowBone.getWorldPosition(elbowWorldPos); 
+                var polePos = poleMesh.position; 
+                var rootWorldPos =  new THREE.Vector3(); 
+                scene.userData.rootBone.getWorldPosition(rootWorldPos); 
+
+                var inv = new THREE.Quaternion();
+                scene.userData.rootBone.getWorldQuaternion(inv);
+                inv.invert();
+
+                var v1 = new THREE.Vector3();
+                v1.subVectors(rootWorldPos, elbowWorldPos);
+                v1.applyQuaternion(inv);
+
+                v1 = v1.normalize();
+
+                var v2 = new THREE.Vector3();
+                v2.subVectors(rootWorldPos, polePos);
+                v2.applyQuaternion(inv);
+
+                v2 = v2.normalize(); 
+
+                var dot = v1.dot(v2);
+                var angle = Math.acos(dot);
+                angle = THREE.MathUtils.clamp(angle, -1., 1.);
+
+                if(Math.abs(angle) < .001) return false; 
+                if(Math.abs(dot) < .00005) return false; 
+                if(1.0 - Math.abs(dot) < .00001) return false; 
+
+                var cross = new THREE.Vector3(); 
+
+                cross.crossVectors(v1, v2);
+                cross.normalize(); 
+                scene.userData.rootBone.rotateOnAxis(cross, angle);
+
+            }
             //rendering multiple scene code from https://github.com/mrdoob/three.js/blob/master/examples/webgl_multiple_elements.html
             function render() {
 				canvas.style.transform = `translateY(${window.scrollY}px)`;
@@ -433,7 +497,6 @@
 				renderer.setClearColor( 0xe0e0e0 );
 				renderer.setScissorTest( true );
 				scenes.forEach( function ( scene ) {
-                   // console.log(scene.userData.element)
 
                     // get the element that is a place holder for where we want to draw the scene
 					const element = scene.userData.element;
