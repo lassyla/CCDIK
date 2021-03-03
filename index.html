@@ -347,7 +347,7 @@
 
                     if(angle > angle_limit) {
                         var amt = angle / (angle + angle_limit); 
-                        scene.userData.currentBone.quaternion.slerp(up, amt); 
+                        scene.userData.currentBone.quaternion.rotateTowards(up, angle - angle_limit); 
                     }
 
                     if(scene.userData.currentBone != scene.userData.rootBone) scene.userData.currentBone = scene.userData.currentBone.parent; 
